@@ -35,12 +35,13 @@
       <li>Click a number, or <kbd>Alt</kbd> + click anything, and type a note. <kbd>Enter</kbd> saves.</li>
       <li><b>Submit</b> sends every note to Claude Code (run <code>/design-notes:notes</code> there first). <b>Copy</b> gives you the notes as text instead.</li>
       <li>Notes are kept in this browser until you submit or clear them.</li>
+      <li>The bookmark is tied to this port. If you change <code>DESIGN_NOTES_PORT</code>, open this page again and drag a new one.</li>
     </ul>
   </div>
 </main>
 <script>
   // The bookmark only loads the overlay from this server, so updating the plugin updates it too
-  const code = `(()=>{const s=document.createElement("script");s.src="${location.origin}/overlay.js?"+Date.now();s.onerror=()=>console.warn("Design notes: start /design-notes:notes in Claude Code");document.documentElement.appendChild(s)})();void 0`
+  const code = `(()=>{const s=document.createElement("script");s.src="${location.origin}/overlay.js?"+Date.now();s.onerror=()=>console.warn("Design notes: the overlay did not load - is /design-notes:notes running in Claude Code? (or this page\x27s security policy blocks it)");document.documentElement.appendChild(s)})();void 0`
   document.getElementById("bookmarklet").href = "javascript:" + encodeURIComponent(code)
   document.getElementById("bookmarklet").addEventListener("click", (e) => e.preventDefault())
 </script>

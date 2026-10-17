@@ -7,10 +7,15 @@
   }
 
   const SERVER = new URL(document.currentScript?.src || "http://localhost:8787/overlay.js").origin
+  const COMMAND = "/design-notes:notes"
   const KEY = "__designNotes"
   const MIN_GAP = 20
   const Z = 2147483647
   const COLOUR = { vertical: "255,0,170", inside: "255,140,0", horizontal: "0,200,255" }
+  const SKIP = "script, style, template, noscript, dialog, svg, [aria-hidden=true], design-notes-layer"
+
+  let destroyed = false
+  let showGaps = true
 
   // ---------- storage (per site origin, in the site's localStorage)
   const load = () => {
@@ -23,8 +28,10 @@
   const save = (notes) => {
     try {
       localStorage.setItem(KEY, JSON.stringify(notes))
-    } catch {}
-    refresh()
+    } catch {
+      setStatus("This page doesn't allow storing notes (storage is blocked) - use Copy before leaving.")
+    }
+    refresh(notes)
   }
   const pageOf = (win) => win.location.origin + win.location.pathname + win.location.search
 
@@ -32,7 +39,8 @@
   const describe = (el) => {
     if (!el || el.nodeType !== 1) return null
     const cls = [...el.classList].slice(0, 10).join(".")
-    const text = (el.innerText || el.getAttribute("aria-label") || "").trim().replace(/\s+/g, " ").slice(0, 60)
+    // textContent: no layout, unlike innerText - matters on big containers
+    const text = (el.getAttribute("aria-label") || el.textContent || "").slice(0, 200).replace(/\s+/g, " ").trim().slice(0, 60)
     return `${el.tagName.toLowerCase()}${el.id ? "#" + el.id : ""}${cls ? "." + cls : ""}${text ? ` «${text}»` : ""}`
   }
   const selectorOf = (el) => {
@@ -51,22 +59,37 @@
   }
 
   // ---------- empty bands: between siblings, and inside a box above/below its content
-  const measureGaps = (win, skipEl) => {
+  const measureGaps = (win) => {
     const doc = win.document
+    if (!doc.body) return []
     const sx = win.scrollX
     const sy = win.scrollY
-    const css = (el) => win.getComputedStyle(el)
-    const visible = (el) => {
-      const cs = css(el)
-      if (cs.display === "none" || cs.visibility === "hidden" || +cs.opacity === 0) return false
-      const r = el.getBoundingClientRect()
-      return r.width > 2 && r.height > 2
+    // One style + box read per element, shared by its "parent" and "child" roles
+    const cache = new Map()
+    const info = (el) => {
+      let i = cache.get(el)
+      if (!i) {
+        const cs = win.getComputedStyle(el)
+        const r = el.getBoundingClientRect()
+        i = {
+          cs,
+          box: { l: r.left + sx, t: r.top + sy, r: r.right + sx, b: r.bottom + sy },
+          shown: cs.visibility !== "hidden" && +cs.opacity !== 0 && r.width > 2 && r.height > 2,
+        }
+        cache.set(el, i)
+      }
+      return i
     }
-    const skip = (el) => el === skipEl || el.closest("script, style, dialog, svg, [aria-hidden=true]") || css(el).position === "fixed"
-    const rect = (el) => {
-      const r = el.getBoundingClientRect()
-      return { l: r.left + sx, t: r.top + sy, r: r.right + sx, b: r.bottom + sy }
-    }
+    // Skip whole subtrees that can't have gaps worth drawing: hidden, fixed (would drift with the page), our own layer
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_ELEMENT, {
+      acceptNode: (el) => {
+        if (el.matches(SKIP)) return NodeFilter.FILTER_REJECT
+        const { cs } = info(el)
+        if (cs.display === "none" || cs.position === "fixed") return NodeFilter.FILTER_REJECT
+        return NodeFilter.FILTER_ACCEPT
+      },
+    })
+
     const bands = []
     const seen = new Set()
     const add = (kind, box, px, a, b) => {
@@ -74,30 +97,39 @@
       const key = [kind, box.l, box.t, box.r, box.b].map((v) => (typeof v === "number" ? Math.round(v / 4) : v)).join(",")
       if (seen.has(key)) return
       seen.add(key)
-      bands.push({ kind, box, px: Math.round(px), between: [describe(a), describe(b)].filter(Boolean) })
+      // The elements, not their descriptions: describing is only needed for the gap someone clicks
+      bands.push({ kind, box, px: Math.round(px), a, b })
     }
-    for (const parent of doc.body.querySelectorAll("*")) {
-      if (skip(parent) || !visible(parent)) continue
-      const kids = [...parent.children].filter((k) => !skip(k) && visible(k) && css(k).position !== "absolute")
+
+    for (let parent = walker.nextNode(); parent; parent = walker.nextNode()) {
+      if (!info(parent).shown) continue
+      const kids = []
+      for (const k of parent.children) {
+        if (k.matches(SKIP)) continue
+        const i = info(k)
+        if (i.shown && i.cs.display !== "none" && i.cs.position !== "absolute" && i.cs.position !== "fixed") kids.push(k)
+      }
       if (!kids.length) continue
-      const p = rect(parent)
-      const rs = kids.map(rect)
-      const top = Math.min(...rs.map((r) => r.t))
-      const bottom = Math.max(...rs.map((r) => r.b))
-      const left = Math.min(...rs.map((r) => r.l))
-      const right = Math.max(...rs.map((r) => r.r))
+      const p = info(parent).box
+      const rs = kids.map((k) => info(k).box)
+      let top = Infinity, bottom = -Infinity, left = Infinity, right = -Infinity, first, last
+      rs.forEach((r, i) => {
+        if (r.t < top) (top = r.t), (first = kids[i])
+        if (r.b > bottom) (bottom = r.b), (last = kids[i])
+        left = Math.min(left, r.l)
+        right = Math.max(right, r.r)
+      })
       // Only what padding and the child's margin create - not alignment filler (justify, min-height, stretch)
-      const ps = css(parent)
-      const first = kids[rs.findIndex((r) => r.t === top)]
-      const last = kids[rs.findIndex((r) => r.b === bottom)]
-      const padT = parseFloat(ps.paddingTop) + parseFloat(ps.borderTopWidth) + Math.max(0, parseFloat(css(first).marginTop))
-      const padB = parseFloat(ps.paddingBottom) + parseFloat(ps.borderBottomWidth) + Math.max(0, parseFloat(css(last).marginBottom))
+      const ps = info(parent).cs
+      const padT = parseFloat(ps.paddingTop) + parseFloat(ps.borderTopWidth) + Math.max(0, parseFloat(info(first).cs.marginTop))
+      const padB = parseFloat(ps.paddingBottom) + parseFloat(ps.borderBottomWidth) + Math.max(0, parseFloat(info(last).cs.marginBottom))
       const inT = Math.min(top - p.t, padT)
       const inB = Math.min(p.b - bottom, padB)
       add("inside", { l: left, r: right, t: top - inT, b: top }, inT, parent, null)
       add("inside", { l: left, r: right, t: bottom, b: bottom + inB }, inB, parent, null)
+      // The next sibling below or to the right; a bounded look-ahead keeps reversed/overlapping layouts from going quadratic
       for (let i = 0; i < kids.length; i++) {
-        for (let j = i + 1; j < kids.length; j++) {
+        for (let j = i + 1; j < Math.min(kids.length, i + 40); j++) {
           const a = rs[i]
           const b = rs[j]
           const xOverlap = Math.min(a.r, b.r) - Math.max(a.l, b.l)
@@ -117,7 +149,19 @@
     return bands.sort((x, y) => x.box.t - y.box.t || x.box.l - y.box.l)
   }
 
-  // ---------- one layer per document (the page and each same-origin iframe)
+  // ---------- DOM helper (no innerHTML: pages with Trusted Types would refuse it)
+  const make = (doc, tag, props = {}, children = []) => {
+    const node = doc.createElement(tag)
+    for (const [k, v] of Object.entries(props)) {
+      if (k === "class") node.className = v
+      else if (k === "text") node.textContent = v
+      else if (k === "style") node.style.cssText = v
+      else node[k] = v
+    }
+    node.append(...children)
+    return node
+  }
+
   const STYLE = `
     :host { all: initial }
     .band { position: absolute; pointer-events: none }
@@ -143,39 +187,27 @@
     li button { padding: 0 6px }
   `
 
-  const frames = []
-  let showGaps = true
-
+  // ---------- one layer per document (the page and each same-origin iframe)
   const mountLayer = (win, frameLabel) => {
     const doc = win.document
-    const host = doc.createElement("design-notes-layer")
-    host.style.cssText = `position:absolute;left:0;top:0;width:0;height:0;z-index:${Z};pointer-events:none`
+    const el = (tag, props, children) => make(doc, tag, props, children)
+    const host = el("design-notes-layer", { style: `position:absolute;left:0;top:0;width:0;height:0;z-index:${Z};pointer-events:none` })
     const root = host.attachShadow({ mode: "open" })
-    root.innerHTML = `<style>${STYLE}</style><div class="gaps"></div><div class="pins"></div><div class="ui"></div>`
+    const gapsEl = el("div")
+    const pinsEl = el("div")
+    const uiEl = el("div")
+    root.append(el("style", { text: STYLE }), gapsEl, pinsEl, uiEl)
     doc.documentElement.appendChild(host)
-    const gapsEl = root.querySelector(".gaps")
-    const pinsEl = root.querySelector(".pins")
-    const uiEl = root.querySelector(".ui")
-    const el = (tag, cls, text) => {
-      const node = doc.createElement(tag)
-      if (cls) node.className = cls
-      if (text != null) node.textContent = text
-      return node
-    }
+    const ours = (e) => e.composedPath().includes(host)
 
     const openEditor = (x, y, label, details) => {
       uiEl.querySelector(".editor")?.remove()
-      const box = el("div", "card editor")
+      const area = el("textarea", { rows: 3, placeholder: "What should change here?" })
+      const cancel = el("button", { text: "Cancel" })
+      const ok = el("button", { class: "primary", text: "Save" })
+      const box = el("div", { class: "card editor" }, [el("b", { text: label }), area, el("div", { class: "row" }, [cancel, ok])])
       box.style.left = `${Math.max(win.scrollX + 8, Math.min(x, win.scrollX + win.innerWidth - 316))}px`
       box.style.top = `${y + 12}px`
-      const area = el("textarea")
-      area.rows = 3
-      area.placeholder = "What should change here?"
-      const cancel = el("button", "", "Cancel")
-      const ok = el("button", "primary", "Save")
-      const row = el("div", "row")
-      row.append(cancel, ok)
-      box.append(el("b", "", label), area, row)
       const close = () => box.remove()
       const commit = () => {
         const text = area.value.trim()
@@ -199,16 +231,14 @@
       }
       cancel.onclick = close
       ok.onclick = commit
-      // Keys typed into the note must not reach the site's own shortcuts
-      area.addEventListener("keydown", (e) => {
-        e.stopPropagation()
+      // Called from onKey: the event never reaches the textarea's own listeners (see onKey)
+      area.dnKeydown = (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault()
           commit()
         }
         if (e.key === "Escape") close()
-      })
-      area.addEventListener("keyup", (e) => e.stopPropagation())
+      }
       uiEl.appendChild(box)
       area.focus()
     }
@@ -216,38 +246,36 @@
     const drawGaps = () => {
       gapsEl.replaceChildren()
       if (!showGaps) return
-      measureGaps(win, host).forEach((g, i) => {
+      measureGaps(win).forEach((g, i) => {
         const n = i + 1
         const { l, t, r, b } = g.box
         const c = COLOUR[g.kind]
-        const band = el("div", "band")
-        band.style.cssText = `left:${l}px;top:${t}px;width:${r - l}px;height:${b - t}px;background:rgba(${c},.16);outline:1px dashed rgba(${c},.9)`
-        const tag = el("div", "tag", `${n} · ${g.px}px`)
+        const tag = el("div", { class: "tag", text: `${n} · ${g.px}px`, title: "Click to add a note about this gap" })
         tag.style.cssText = `left:${(l + r) / 2}px;top:${(t + b) / 2}px;background:rgb(${c})`
-        tag.title = "Click to add a note about this gap"
         tag.onclick = (e) => {
           e.preventDefault()
           e.stopPropagation()
-          openEditor(e.pageX, e.pageY, `Gap ${n} · ${g.px}px`, { gap: { n, px: g.px, kind: g.kind, between: g.between } })
+          const between = [describe(g.a), describe(g.b)].filter(Boolean)
+          openEditor(e.pageX, e.pageY, `Gap ${n} · ${g.px}px`, { gap: { n, px: g.px, kind: g.kind, between } })
         }
-        gapsEl.append(band, tag)
+        gapsEl.append(
+          el("div", { class: "band", style: `left:${l}px;top:${t}px;width:${r - l}px;height:${b - t}px;background:rgba(${c},.16);outline:1px dashed rgba(${c},.9)` }),
+          tag
+        )
       })
     }
 
     const drawPins = (notes) => {
-      pinsEl.replaceChildren()
-      for (const note of notes) {
-        if (note.page !== pageOf(window) || note.frame !== frameLabel) continue
-        const pin = el("div", "pin", `✎ ${note.text}`)
-        pin.style.left = `${note.x}px`
-        pin.style.top = `${note.y}px`
-        pinsEl.appendChild(pin)
-      }
+      pinsEl.replaceChildren(
+        ...notes
+          .filter((note) => note.page === pageOf(window) && note.frame === frameLabel)
+          .map((note) => el("div", { class: "pin", text: `✎ ${note.text}`, style: `left:${note.x}px;top:${note.y}px` }))
+      )
     }
 
     // Alt + click anywhere: a note about that element (and no navigation / download)
     const onClick = (e) => {
-      if (!e.altKey || e.composedPath().includes(host)) return
+      if (!e.altKey || ours(e)) return
       e.preventDefault()
       e.stopPropagation()
       const target = e.target
@@ -255,17 +283,31 @@
         target: { selector: selectorOf(target), element: describe(target), parent: describe(target.parentElement) },
       })
     }
+    // Typing a note must not trigger the site's own shortcuts (outside the shadow root the target looks like our
+    // host, not a textarea). Stopping it here, first in line, also stops our own listeners - so Enter/Escape run here.
+    const onKey = (e) => {
+      if (!ours(e)) return
+      if (e.type === "keydown") e.composedPath()[0].dnKeydown?.(e)
+      e.stopImmediatePropagation()
+    }
+    // Scrolling an inner container moves the content under the bands - measure again when it settles
+    const onScroll = (e) => {
+      if (e.target !== doc && e.target !== doc.documentElement && !ours(e)) schedule(redraw, 200)
+    }
     win.addEventListener("click", onClick, true)
+    for (const type of ["keydown", "keyup", "keypress"]) win.addEventListener(type, onKey, true)
+    win.addEventListener("scroll", onScroll, true)
 
     return {
-      win,
-      host,
-      uiEl,
+      doc,
       el,
+      uiEl,
       drawGaps,
       drawPins,
       destroy() {
         win.removeEventListener("click", onClick, true)
+        for (const type of ["keydown", "keyup", "keypress"]) win.removeEventListener(type, onKey, true)
+        win.removeEventListener("scroll", onScroll, true)
         host.remove()
       },
     }
@@ -273,45 +315,52 @@
 
   // ---------- the panel (top window only)
   const top = mountLayer(window, null)
-  const panel = top.el("div", "card panel")
-  panel.innerHTML = `
-    <header><b>Design notes</b><span class="count"></span><button class="close" title="Turn off">×</button></header>
-    <div class="row">
-      <button class="primary submit">Submit</button>
-      <button class="copy">Copy</button>
-      <button class="clear">Clear</button>
-      <button class="toggle"></button>
-      <button class="redraw" title="Measure again after scrolling, resizing or navigating">Redraw</button>
-    </div>
-    <div class="hint">Click a number, or Alt + click anything, to add a note.</div>
-    <div class="status"></div>
-    <ul></ul>`
-  top.uiEl.appendChild(panel)
-  const $ = (sel) => panel.querySelector(sel)
-  const setStatus = (text) => ($(".status").textContent = text)
+  const button = (cls, text, title) => top.el("button", { class: cls, text, ...(title ? { title } : {}) })
+  const ui = {
+    count: top.el("span"),
+    close: button("", "×", "Turn off"),
+    submit: button("primary", "Submit"),
+    copy: button("", "Copy"),
+    clear: button("", "Clear"),
+    toggle: button(""),
+    redraw: button("", "Redraw", "Measure again after scrolling, resizing or navigating"),
+    status: top.el("div", { class: "status" }),
+    list: top.el("ul"),
+  }
+  top.uiEl.appendChild(
+    top.el("div", { class: "card panel" }, [
+      top.el("header", {}, [top.el("b", { text: "Design notes" }), ui.count, ui.close]),
+      top.el("div", { class: "row" }, [ui.submit, ui.copy, ui.clear, ui.toggle, ui.redraw]),
+      top.el("div", { class: "hint", text: "Click a number, or Alt + click anything, to add a note." }),
+      ui.status,
+      ui.list,
+    ])
+  )
+  function setStatus(text) {
+    ui.status.textContent = text
+  }
 
   const renderPanel = (notes) => {
     const here = notes.filter((n) => n.page === pageOf(window)).length
-    $(".count").textContent = `${notes.length} total · ${here} on this page`
-    $(".submit").disabled = $(".copy").disabled = $(".clear").disabled = !notes.length
-    $(".toggle").textContent = showGaps ? "Hide gaps" : "Show gaps"
-    $(".clear").textContent = "Clear"
-    delete $(".clear").dataset.armed
-    const list = $("ul")
-    list.replaceChildren()
-    notes.forEach((note) => {
-      const item = top.el("li")
-      const label = top.el("span", "", `${new URL(note.page).pathname}${note.frame ? " · iframe" : ""}${note.gap ? ` · gap ${note.gap.n}` : ""}: ${note.text}`)
-      label.title = "Scroll to it"
-      label.onclick = () => {
-        if (note.page === pageOf(window) && !note.frame) window.scrollTo({ top: Math.max(0, note.y - 120), behavior: "smooth" })
-      }
-      const remove = top.el("button", "", "×")
-      remove.title = "Delete"
-      remove.onclick = () => save(load().filter((n) => n.id !== note.id))
-      item.append(label, remove)
-      list.appendChild(item)
-    })
+    ui.count.textContent = `${notes.length} total · ${here} on this page`
+    ui.submit.disabled = ui.copy.disabled = ui.clear.disabled = !notes.length
+    ui.toggle.textContent = showGaps ? "Hide gaps" : "Show gaps"
+    ui.clear.textContent = "Clear"
+    delete ui.clear.dataset.armed
+    ui.list.replaceChildren(
+      ...notes.map((note) => {
+        const label = top.el("span", {
+          text: `${new URL(note.page).pathname}${note.frame ? " · iframe" : ""}${note.gap ? ` · gap ${note.gap.n}` : ""}: ${note.text}`,
+          title: "Scroll to it",
+        })
+        label.onclick = () => {
+          if (note.page === pageOf(window) && !note.frame) window.scrollTo({ top: Math.max(0, note.y - 120), behavior: "smooth" })
+        }
+        const remove = button("", "×", "Delete")
+        remove.onclick = () => save(load().filter((n) => n.id !== note.id))
+        return top.el("li", {}, [label, remove])
+      })
+    )
   }
 
   const asMarkdown = (notes) =>
@@ -322,103 +371,132 @@
       })
       .join("\n")
 
-  $(".close").onclick = () => api.destroy()
-  $(".toggle").onclick = () => {
+  // navigator.clipboard needs https or localhost; plain-http dev hosts (*.test) get the old way
+  const copyText = async (text) => {
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text)
+    const area = top.el("textarea", { value: text, style: "position:fixed;opacity:0" })
+    top.uiEl.appendChild(area)
+    area.select()
+    const ok = top.doc.execCommand("copy")
+    area.remove()
+    if (!ok) throw new Error("copy refused")
+  }
+
+  ui.close.onclick = () => api.destroy()
+  ui.toggle.onclick = () => {
     showGaps = !showGaps
     redraw()
   }
-  $(".redraw").onclick = () => redraw()
+  ui.redraw.onclick = () => redraw()
   // Two clicks instead of confirm(): a native dialog would block the page
-  $(".clear").onclick = (e) => {
-    const button = e.currentTarget
-    if (button.dataset.armed) return save([])
-    button.dataset.armed = "1"
-    button.textContent = "Sure? Click again"
+  ui.clear.onclick = () => {
+    if (ui.clear.dataset.armed) return save([])
+    ui.clear.dataset.armed = "1"
+    ui.clear.textContent = "Sure? Click again"
   }
-  $(".copy").onclick = async () => {
-    const text = asMarkdown(load())
+  ui.copy.onclick = async () => {
     try {
-      await navigator.clipboard.writeText(text)
+      await copyText(asMarkdown(load()))
       setStatus("Copied as text - paste it into Claude Code.")
     } catch {
-      setStatus("Copy was blocked by the browser.")
+      setStatus("The browser blocked copying.")
     }
   }
-  $(".submit").onclick = async () => {
+  ui.submit.onclick = async () => {
     const notes = load()
-    $(".submit").disabled = true
+    ui.submit.disabled = true
     setStatus("Sending…")
+    let res
     try {
-      const res = await fetch(`${SERVER}/notes`, { method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify(notes) })
-      if (!res.ok) throw new Error(await res.text())
-      const { waiting } = await res.json()
-      const sent = new Set(notes.map((n) => n.id))
-      save(load().filter((n) => !sent.has(n.id)))
-      setStatus(waiting ? "Sent - Claude is on it." : "Sent. Claude picks them up as soon as /notes is waiting.")
-    } catch (error) {
-      $(".submit").disabled = false
-      setStatus(
-        String(error.message).includes("origin")
+      res = await fetch(`${SERVER}/notes`, { method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify(notes) })
+    } catch {
+      ui.submit.disabled = false
+      return setStatus(`Couldn't reach Claude Code. Run ${COMMAND} there (or the page's security policy blocks it - then use Copy).`)
+    }
+    if (!res.ok) {
+      ui.submit.disabled = false
+      const reason = await res.text()
+      return setStatus(
+        reason.includes("origin")
           ? "This site isn't allowed to submit. Add its origin to DESIGN_NOTES_ORIGINS, or use Copy."
-          : "Couldn't reach Claude Code. Run /notes there, or use Copy."
+          : `Claude Code refused the notes (${reason}). Use Copy instead.`
       )
     }
+    const { waiting } = await res.json()
+    const sent = new Set(notes.map((n) => n.id))
+    save(load().filter((n) => !sent.has(n.id)))
+    setStatus(waiting ? "Sent - Claude is on it." : `Sent. Claude picks them up as soon as ${COMMAND} is waiting.`)
   }
 
   // ---------- same-origin iframes get their own layer; cross-origin ones can't be reached
+  let frames = []
   const syncFrames = () => {
-    for (const f of [...frames]) {
-      if (!f.iframe.isConnected || f.iframe.contentWindow !== f.layer.win) {
+    frames = frames.filter((f) => {
+      let current = null
+      try {
+        current = f.iframe.isConnected ? f.iframe.contentDocument : null
+      } catch {}
+      // Gone, or navigated to a new document: drop the old layer (a fresh one is mounted below)
+      if (current === f.layer.doc) return true
+      try {
         f.layer.destroy()
-        frames.splice(frames.indexOf(f), 1)
-      }
-    }
-    for (const iframe of document.querySelectorAll("iframe")) {
-      if (frames.some((f) => f.iframe === iframe)) continue
+      } catch {}
+      return false
+    })
+    document.querySelectorAll("iframe").forEach((iframe, index) => {
+      if (frames.some((f) => f.iframe === iframe)) return
       let win
       try {
         win = iframe.contentWindow
-        if (!win?.document?.documentElement) continue
+        if (!win?.document?.body) return
       } catch {
-        continue
+        return // cross-origin
       }
-      const label = iframe.getAttribute("src") || iframe.name || "iframe"
-      frames.push({ iframe, layer: mountLayer(win, label) })
-    }
+      frames.push({ iframe, layer: mountLayer(win, `#${index + 1} ${win.location.href}`) })
+    })
   }
 
   const layers = () => [top, ...frames.map((f) => f.layer)]
-  function refresh() {
-    const notes = load()
+  // A layer whose iframe went away mid-draw must not stop the others
+  const eachLayer = (fn) =>
+    layers().forEach((layer) => {
+      try {
+        fn(layer)
+      } catch {}
+    })
+  function refresh(notes = load()) {
     renderPanel(notes)
-    layers().forEach((l) => l.drawPins(notes))
+    eachLayer((l) => l.drawPins(notes))
   }
   function redraw() {
+    if (destroyed) return
     syncFrames()
-    layers().forEach((l) => l.drawGaps())
+    eachLayer((l) => l.drawGaps())
     refresh()
   }
 
-  // Re-measure after a resize and after client-side navigation
-  let resizeTimer
-  const onResize = () => {
-    clearTimeout(resizeTimer)
-    resizeTimer = setTimeout(redraw, 250)
+  // One timer for every "measure again later": resize, inner scroll, client-side navigation
+  let timer
+  function schedule(fn, ms) {
+    clearTimeout(timer)
+    timer = setTimeout(fn, ms)
   }
+  const onResize = () => schedule(redraw, 250)
   window.addEventListener("resize", onResize)
   let lastPage = pageOf(window)
   const navTimer = setInterval(() => {
     if (pageOf(window) === lastPage) return
     lastPage = pageOf(window)
-    setTimeout(redraw, 600)
+    schedule(redraw, 600)
   }, 500)
 
   const api = {
     destroy() {
+      destroyed = true
       clearInterval(navTimer)
-      clearTimeout(resizeTimer)
+      clearTimeout(timer)
       window.removeEventListener("resize", onResize)
-      layers().forEach((l) => l.destroy())
+      eachLayer((l) => l.destroy())
       delete window.__designNotes
     },
   }
