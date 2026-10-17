@@ -1,6 +1,6 @@
 {
   "name": "design-notes",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Mark up your running site in the browser and send the notes straight to Claude Code to fix. Start with /design-notes:start (runs a local server on :8787).",
   "license": "MIT",
   "keywords": ["design", "ui", "feedback", "spacing", "bookmarklet"]
