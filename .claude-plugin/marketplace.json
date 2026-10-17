@@ -6,7 +6,7 @@
     {
       "name": "design-notes",
       "source": ".",
-      "description": "Mark up your running site in the browser and send the notes straight to Claude Code to fix."
+      "description": "Mark up your running site in the browser and send the notes straight to Claude Code to fix. Start with /design-notes:start (runs a local server on :8787)."
     }
   ]
 }

@@ -19,11 +19,11 @@ In Claude Code (older versions: `/plugin marketplace add craghagBg/design-notes`
 
 ## Use
 
-1. In Claude Code, in your project: `/design-notes:notes`. It starts a small local server (port 8787) and waits for notes.
+1. In Claude Code, in your project: `/design-notes:start` (or `/design-notes:notes` - same thing). It starts a small local server (port 8787) and waits for notes.
 2. First time only: open http://localhost:8787/ and drag **📏 Design notes** to the bookmarks bar.
 3. Open your site, click the bookmark, leave notes, press **Submit**. Claude picks them up and keeps listening for the next batch.
 
-`/design-notes:notes stop` stops listening.
+`/design-notes:start stop` (or `/design-notes:notes stop`) stops listening.
 
 ## Settings
 
