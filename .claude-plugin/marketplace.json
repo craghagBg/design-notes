@@ -1,0 +1,12 @@
+{
+  "name": "design-notes",
+  "description": "Design notes: visual UI feedback from the browser to Claude Code",
+  "owner": { "name": "design-notes" },
+  "plugins": [
+    {
+      "name": "design-notes",
+      "source": ".",
+      "description": "Mark up your running site in the browser and send the notes straight to Claude Code to fix."
+    }
+  ]
+}
