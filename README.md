@@ -11,11 +11,10 @@ Point at what looks wrong on your running site, write a note, press **Submit** -
 
 Needs Node 18+ and Chrome (or any browser with a bookmarks bar).
 
-In Claude Code:
+In Claude Code (older versions: `/plugin marketplace add craghagBg/design-notes`, then `/plugin install design-notes@design-notes`):
 
 ```
-/plugin marketplace add <owner>/design-notes
-/plugin install design-notes@design-notes
+/plugin install design-notes --marketplace craghagBg/design-notes
 ```
 
 ## Use
@@ -31,7 +30,9 @@ In Claude Code:
 | Variable | Default | |
 | --- | --- | --- |
 | `DESIGN_NOTES_PORT` | `8787` | port of the local server |
-| `DESIGN_NOTES_ORIGINS` | - | extra sites allowed to submit, comma separated exact origins (`https://staging.example.com`). `localhost`, `127.0.0.1`, `*.localhost` and `*.test` are always allowed. |
+| `DESIGN_NOTES_ORIGINS` | - | extra sites allowed to submit: comma separated exact origins (`https://staging.example.com`), or `*` for any site. `localhost`, `127.0.0.1`, `*.localhost` and `*.test` are always allowed. |
+
+The overlay itself works on any site you open; the list only decides which sites may **Submit**. It exists so that some other page open in your browser can't send "notes" to Claude, which edits your code with them. `*` turns that off - fine while you only browse your own sites.
 
 ## How it works
 

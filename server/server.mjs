@@ -20,7 +20,7 @@ const WAIT_MS = 4 * 60 * 1000
 // Per-user, not the shared temp dir: other users can't plant notes or read them
 export const stateDir = (port) => join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "design-notes", String(port))
 
-// Local development hosts, plus whatever DESIGN_NOTES_ORIGINS lists (comma separated, exact origins).
+// Local development hosts, plus whatever DESIGN_NOTES_ORIGINS lists (comma separated, exact origins, or * for any site).
 export function originAllowed(origin, extra = []) {
   if (!origin) return false
   let url
@@ -29,7 +29,7 @@ export function originAllowed(origin, extra = []) {
   } catch {
     return false
   }
-  if (extra.includes(url.origin)) return true
+  if (extra.includes("*") || extra.includes(url.origin)) return true
   const host = url.hostname
   return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".localhost") || host.endsWith(".test")
 }

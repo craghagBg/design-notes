@@ -18,7 +18,7 @@ Run in the background (`run_in_background: true`):
 node "${CLAUDE_PLUGIN_ROOT}/server/server.mjs"
 ```
 
-It prints `listening on http://localhost:<port>` or `already running` (both fine - another session may own it; then notes go to whichever session is waiting). If the port is taken by something else, tell the user to set `DESIGN_NOTES_PORT`. Sites outside localhost / `*.localhost` / `*.test` can only submit if their exact origin is in `DESIGN_NOTES_ORIGINS` (comma separated) - mention this only when the user's site is not local.
+It prints `listening on http://localhost:<port>` or `already running` (both fine - another session may own it; then notes go to whichever session is waiting). If the port is taken by something else, tell the user to set `DESIGN_NOTES_PORT`. Sites outside localhost / `*.localhost` / `*.test` can only submit if their exact origin is in `DESIGN_NOTES_ORIGINS` (comma separated, or `*` for any site) - mention this only when the user's site is not local.
 
 ## 2. Tell the user how to start (short)
 

@@ -14,6 +14,7 @@ test("only local development origins may submit by default", () => {
     assert.equal(originAllowed(no), false, String(no))
   }
   assert.equal(originAllowed("https://staging.example.com", ["https://staging.example.com"]), true)
+  assert.equal(originAllowed("https://anything.example", ["*"]), true)
 })
 
 const boot = async (opts = {}) => {
